@@ -90,7 +90,24 @@ class DatabaseManager:
         conn.commit()
         conn.close()
         print(f"数据库初始化成功: {self.db_path}")
-
+        
+    def add_project(self, project_name, start_station, end_station, base_start_date=None):
+            """向 projects 表中插入一条新项目数据"""
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            try:
+                # 使用参数化查询 (?, ?) 防止 SQL 注入
+                cursor.execute('''
+                    INSERT INTO projects (project_name, start_station, end_station, base_start_date)
+                    VALUES (?, ?, ?, ?)
+                ''', (project_name, start_station, end_station, base_start_date))
+                conn.commit()
+                return True, "项目基础信息保存成功！"
+            except Exception as e:
+                conn.rollback() # 发生错误时回滚事务
+                return False, f"保存失败: {str(e)}"
+            finally:
+                conn.close()
 # 测试用
 if __name__ == "__main__":
     db = DatabaseManager()
