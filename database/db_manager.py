@@ -92,22 +92,145 @@ class DatabaseManager:
         print(f"数据库初始化成功: {self.db_path}")
         
     def add_project(self, project_name, start_station, end_station, base_start_date=None):
-            """向 projects 表中插入一条新项目数据"""
-            conn = self.get_connection()
+        """向 projects 表中插入一条新项目数据"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            # 使用参数化查询 (?, ?) 防止 SQL 注入
+            cursor.execute('''
+                INSERT INTO projects (project_name, start_station, end_station, base_start_date)
+                VALUES (?, ?, ?, ?)
+            ''', (project_name, start_station, end_station, base_start_date))
+            conn.commit()
+            return True, "项目基础信息保存成功！"
+        except Exception as e:
+            conn.rollback() # 发生错误时回滚事务
+            return False, f"保存失败: {str(e)}"
+        finally:
+            conn.close()
+
+    def get_all_projects(self):
+        """获取所有历史项目列表"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('SELECT id, project_name, start_station, end_station FROM projects ORDER BY id DESC')
+            return cursor.fetchall()
+        except Exception as e:
+            print(f"查询历史项目失败: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def update_project(self, project_id, project_name, start_station, end_station):
+        """更新已存在的项目信息"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE projects 
+                SET project_name=?, start_station=?, end_station=? 
+                WHERE id=?
+            ''', (project_name, start_station, end_station, project_id))
+            conn.commit()
+            return True, "项目信息更新成功！"
+        except Exception as e:
+            conn.rollback()
+            return False, f"更新失败: {str(e)}"
+        finally:
+            conn.close()
+
+    # ================= Tab 2：支洞与地质分段数据操作 =================
+
+    def add_adit(self, project_id, adit_name, intersection_station, available_time=0.0):
+        """添加单条支洞信息（包含进洞时间）"""
+        conn = self.get_connection()
+        try:
+            conn.cursor().execute('''
+                INSERT INTO adits (project_id, adit_name, intersection_station, available_time)
+                VALUES (?, ?, ?, ?)
+            ''', (project_id, adit_name, intersection_station, available_time))
+            conn.commit()
+            return True, "支洞添加成功！"
+        except Exception as e:
+            conn.rollback()
+            return False, f"添加失败: {str(e)}"
+        finally:
+            conn.close()
+
+    def get_adits(self, project_id):
+        """获取当前项目的所有支洞（包含进洞时间）"""
+        conn = self.get_connection()
+        try:
             cursor = conn.cursor()
-            try:
-                # 使用参数化查询 (?, ?) 防止 SQL 注入
-                cursor.execute('''
-                    INSERT INTO projects (project_name, start_station, end_station, base_start_date)
-                    VALUES (?, ?, ?, ?)
-                ''', (project_name, start_station, end_station, base_start_date))
-                conn.commit()
-                return True, "项目基础信息保存成功！"
-            except Exception as e:
-                conn.rollback() # 发生错误时回滚事务
-                return False, f"保存失败: {str(e)}"
-            finally:
-                conn.close()
+            cursor.execute('SELECT id, adit_name, intersection_station, available_time FROM adits WHERE project_id=? ORDER BY intersection_station ASC', (project_id,))
+            return cursor.fetchall()
+        except Exception as e:
+            raise Exception(f"查询支洞失败: {str(e)}") # 【修改】：不要 return []，直接抛出异常
+        finally:
+            conn.close()
+
+    def add_segment(self, project_id, start_station, end_station, rock_type):
+        """添加单条地质分段信息"""
+        conn = self.get_connection()
+        try:
+            conn.cursor().execute('''
+                INSERT INTO geological_segments (project_id, start_station, end_station, rock_type)
+                VALUES (?, ?, ?, ?)
+            ''', (project_id, start_station, end_station, rock_type))
+            conn.commit()
+            return True, "地质分段添加成功！"
+        except Exception as e:
+            conn.rollback()
+            return False, f"添加失败: {str(e)}"
+        finally:
+            conn.close()
+
+    def get_segments(self, project_id):
+        """获取当前项目的所有地质分段"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, start_station, end_station, rock_type FROM geological_segments WHERE project_id=? ORDER BY start_station ASC', (project_id,))
+            return cursor.fetchall()
+        except Exception as e:
+            raise Exception(f"查询地质分段失败: {str(e)}") # 【修改】：直接抛出异常
+        finally:
+            conn.close()
+            
+    # ================= Tab 3：开挖策略与工效数据操作 =================
+
+    def add_speed_config(self, project_id, rock_type, speed, method="开挖"):
+        """添加围岩工效配置（支持覆盖更新）"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            # 检查是否已存在同类围岩
+            cursor.execute("SELECT id FROM speed_configs WHERE rock_type=? AND method=?", (rock_type, method))
+            row = cursor.fetchone()
+            if row:
+                cursor.execute("UPDATE speed_configs SET speed=? WHERE id=?", (speed, row[0]))
+            else:
+                cursor.execute("INSERT INTO speed_configs (rock_type, method, speed) VALUES (?, ?, ?)", (rock_type, method, speed))
+            conn.commit()
+            return True, "工效添加成功！"
+        except Exception as e:
+            conn.rollback()
+            return False, f"添加失败: {str(e)}"
+        finally:
+            conn.close()
+
+    def get_speed_configs(self):
+        """获取所有工效配置"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT rock_type, speed FROM speed_configs WHERE method='开挖' ORDER BY rock_type")
+            return cursor.fetchall()
+        except Exception as e:
+            raise Exception(f"查询工效失败: {str(e)}")
+        finally:
+            conn.close()
 # 测试用
 if __name__ == "__main__":
     db = DatabaseManager()
