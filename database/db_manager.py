@@ -220,15 +220,101 @@ class DatabaseManager:
         finally:
             conn.close()
 
-    def get_speed_configs(self):
-        """获取所有工效配置"""
+    def get_speed_configs(self, method="开挖"):
+        """获取指定工法的所有工效配置"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT rock_type, speed FROM speed_configs WHERE method='开挖' ORDER BY rock_type")
+            cursor.execute("SELECT rock_type, speed FROM speed_configs WHERE method=? ORDER BY rock_type", (method,))
             return cursor.fetchall()
         except Exception as e:
             raise Exception(f"查询工效失败: {str(e)}")
+        finally:
+            conn.close()
+
+    def get_excavation_results(self, project_id):
+        """拉取开挖阶段的计算成果（用于推导衬砌开工时间）"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                           SELECT adits.adit_name,
+                                  work_faces.direction,
+                                  work_faces.calc_end_station,
+                                  work_faces.calc_finish_time
+                           FROM work_faces
+                                    JOIN adits ON work_faces.adit_id = adits.id
+                           WHERE work_faces.method = '开挖'
+                             AND adits.project_id = ?
+                           """, (project_id,))
+            return cursor.fetchall()
+        except Exception as e:
+            raise Exception(f"读取开挖数据失败: {str(e)}")
+        finally:
+            conn.close()
+
+    # ================= 核心计算结果回写操作 =================
+
+    def clear_and_save_work_faces(self, project_id, results_list, method="开挖"):
+        """清空旧的计算结果，并写入新的工作面数据"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            # 1. 清空当前项目下，该工法的所有旧记录
+            cursor.execute("""
+                           DELETE
+                           FROM work_faces
+                           WHERE method = ?
+                             AND adit_id IN (SELECT id FROM adits WHERE project_id = ?)
+                           """, (method, project_id))
+
+            # 2. 批量插入新记录
+            for res in results_list:
+                cursor.execute('''
+                               INSERT INTO work_faces (adit_id, direction, method, start_time,
+                                                       is_dominant, buffer_days, calc_start_station,
+                                                       calc_end_station, calc_work_duration, calc_finish_time)
+                               VALUES (?, ?, ?, (SELECT available_time FROM adits WHERE id = ?), ?, ?, ?, ?, ?, ?)
+                               ''', (
+                                   res['adit_id'], res['direction'], method, res['adit_id'],
+                                   res['is_dominant'], res['buffer_days'], res['calc_start'],
+                                   res['calc_end'], res['duration'], res['finish_time']
+                               ))
+            conn.commit()
+            return True, "排期计算成功并已保存入库！"
+        except Exception as e:
+            conn.rollback()
+            return False, f"保存计算结果失败: {str(e)}"
+        finally:
+            conn.close()
+
+    # ================= Tab 5：成果展示数据提取 =================
+
+    def get_all_work_faces(self, project_id):
+        """获取当前项目所有的计算成果（包含开挖和衬砌），用于生成图表和报表"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            # 联表查询，按工法（先开挖后衬砌）和开工时间排序
+            cursor.execute("""
+                           SELECT a.adit_name,
+                                  w.direction,
+                                  w.method,
+                                  w.calc_start_station,
+                                  w.calc_end_station,
+                                  w.start_time,
+                                  w.calc_finish_time,
+                                  w.calc_work_duration,
+                                  w.is_dominant,
+                                  w.buffer_days
+                           FROM work_faces w
+                                    JOIN adits a ON w.adit_id = a.id
+                           WHERE a.project_id = ?
+                           ORDER BY w.method, w.start_time ASC
+                           """, (project_id,))
+            return cursor.fetchall()
+        except Exception as e:
+            raise Exception(f"提取成果数据失败: {str(e)}")
         finally:
             conn.close()
 # 测试用
