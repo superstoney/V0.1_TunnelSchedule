@@ -17,7 +17,7 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # 开启外键支持 (SQLite默认关闭)
+        # 开启外键支持
         cursor.execute("PRAGMA foreign_keys = ON;")
 
         # 创建 projects 表
@@ -40,7 +40,7 @@ class DatabaseManager:
                 end_station REAL NOT NULL,
                 rock_type TEXT NOT NULL,
                 sort_order INTEGER DEFAULT 0,
-                FOREIGN KEY(project_id) REFERENCES projects(id)
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
         ''')
 
@@ -53,11 +53,11 @@ class DatabaseManager:
                 intersection_station REAL NOT NULL,
                 available_time REAL DEFAULT 0,
                 is_virtual INTEGER DEFAULT 0,
-                FOREIGN KEY(project_id) REFERENCES projects(id)
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
         ''')
 
-        # 创建 speed_configs 表
+        # 创建 speed_configs 表 (全局通用)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS speed_configs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +66,40 @@ class DatabaseManager:
                 speed REAL NOT NULL
             )
         ''')
+
+        # 【新增】专门用于衬砌分段工效的表
+        cursor.execute('''
+                       CREATE TABLE IF NOT EXISTS lining_speeds
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           project_id
+                           INTEGER,
+                           start_station
+                           REAL
+                           NOT
+                           NULL,
+                           end_station
+                           REAL
+                           NOT
+                           NULL,
+                           speed
+                           REAL
+                           NOT
+                           NULL,
+                           FOREIGN
+                           KEY
+                       (
+                           project_id
+                       ) REFERENCES projects
+                       (
+                           id
+                       ) ON DELETE CASCADE
+                           )
+                       ''')
 
         # 创建 work_faces 表
         cursor.execute('''
@@ -83,28 +117,28 @@ class DatabaseManager:
                 calc_end_station REAL,
                 calc_work_duration REAL,
                 calc_finish_time REAL,
-                FOREIGN KEY(adit_id) REFERENCES adits(id)
+                FOREIGN KEY(adit_id) REFERENCES adits(id) ON DELETE CASCADE
             )
         ''')
 
         conn.commit()
         conn.close()
         print(f"数据库初始化成功: {self.db_path}")
+
+    # ================= Tab 1：项目级操作 =================
         
     def add_project(self, project_name, start_station, end_station, base_start_date=None):
-        """向 projects 表中插入一条新项目数据"""
+        """插入一条新项目数据"""
         conn = self.get_connection()
-        cursor = conn.cursor()
         try:
-            # 使用参数化查询 (?, ?) 防止 SQL 注入
-            cursor.execute('''
+            conn.cursor().execute('''
                 INSERT INTO projects (project_name, start_station, end_station, base_start_date)
                 VALUES (?, ?, ?, ?)
             ''', (project_name, start_station, end_station, base_start_date))
             conn.commit()
             return True, "项目基础信息保存成功！"
         except Exception as e:
-            conn.rollback() # 发生错误时回滚事务
+            conn.rollback()
             return False, f"保存失败: {str(e)}"
         finally:
             conn.close()
@@ -112,8 +146,8 @@ class DatabaseManager:
     def get_all_projects(self):
         """获取所有历史项目列表"""
         conn = self.get_connection()
-        cursor = conn.cursor()
         try:
+            cursor = conn.cursor()
             cursor.execute('SELECT id, project_name, start_station, end_station FROM projects ORDER BY id DESC')
             return cursor.fetchall()
         except Exception as e:
@@ -125,9 +159,8 @@ class DatabaseManager:
     def update_project(self, project_id, project_name, start_station, end_station):
         """更新已存在的项目信息"""
         conn = self.get_connection()
-        cursor = conn.cursor()
         try:
-            cursor.execute('''
+            conn.cursor().execute('''
                 UPDATE projects 
                 SET project_name=?, start_station=?, end_station=? 
                 WHERE id=?
@@ -140,88 +173,95 @@ class DatabaseManager:
         finally:
             conn.close()
 
-    # ================= Tab 2：支洞与地质分段数据操作 =================
-
-    def add_adit(self, project_id, adit_name, intersection_station, available_time=0.0):
-        """添加单条支洞信息（包含进洞时间）"""
+    def delete_project(self, project_id):
+        """【新增】彻底删除某个项目，以及其级联的所有支洞、分段和排期成果"""
         conn = self.get_connection()
         try:
-            conn.cursor().execute('''
-                INSERT INTO adits (project_id, adit_name, intersection_station, available_time)
-                VALUES (?, ?, ?, ?)
-            ''', (project_id, adit_name, intersection_station, available_time))
+            cursor = conn.cursor()
+            # 为了防止老版本数据库没有配置 ON DELETE CASCADE，这里手动执行清理顺序
+            cursor.execute("DELETE FROM work_faces WHERE adit_id IN (SELECT id FROM adits WHERE project_id=?)", (project_id,))
+            cursor.execute("DELETE FROM adits WHERE project_id=?", (project_id,))
+            cursor.execute("DELETE FROM geological_segments WHERE project_id=?", (project_id,))
+            cursor.execute("DELETE FROM projects WHERE id=?", (project_id,))
             conn.commit()
-            return True, "支洞添加成功！"
+            return True, "项目及全部相关数据已彻底删除！"
         except Exception as e:
             conn.rollback()
-            return False, f"添加失败: {str(e)}"
+            return False, f"删除失败: {str(e)}"
         finally:
             conn.close()
 
+    # ================= Tab 2：支洞与地质分段数据操作 =================
+
     def get_adits(self, project_id):
-        """获取当前项目的所有支洞（包含进洞时间）"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute('SELECT id, adit_name, intersection_station, available_time FROM adits WHERE project_id=? ORDER BY intersection_station ASC', (project_id,))
             return cursor.fetchall()
         except Exception as e:
-            raise Exception(f"查询支洞失败: {str(e)}") # 【修改】：不要 return []，直接抛出异常
+            raise Exception(f"查询支洞失败: {str(e)}")
         finally:
             conn.close()
 
-    def add_segment(self, project_id, start_station, end_station, rock_type):
-        """添加单条地质分段信息"""
+    def save_adits_batch(self, project_id, data_list):
+        """【新增】批量保存支洞（覆盖原数据）"""
         conn = self.get_connection()
         try:
-            conn.cursor().execute('''
-                INSERT INTO geological_segments (project_id, start_station, end_station, rock_type)
-                VALUES (?, ?, ?, ?)
-            ''', (project_id, start_station, end_station, rock_type))
+            cursor = conn.cursor()
+            # 1. 级联清理旧数据
+            cursor.execute("DELETE FROM work_faces WHERE adit_id IN (SELECT id FROM adits WHERE project_id=?)", (project_id,))
+            cursor.execute("DELETE FROM adits WHERE project_id=?", (project_id,))
+            
+            # 2. 批量写入新数据
+            for item in data_list:
+                cursor.execute('''
+                    INSERT INTO adits (project_id, adit_name, intersection_station, available_time)
+                    VALUES (?, ?, ?, ?)
+                ''', (project_id, item['name'], item['station'], item['time']))
             conn.commit()
-            return True, "地质分段添加成功！"
+            return True, "支洞信息批量保存成功！"
         except Exception as e:
             conn.rollback()
-            return False, f"添加失败: {str(e)}"
+            return False, f"支洞保存失败: {str(e)}"
         finally:
             conn.close()
 
     def get_segments(self, project_id):
-        """获取当前项目的所有地质分段"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute('SELECT id, start_station, end_station, rock_type FROM geological_segments WHERE project_id=? ORDER BY start_station ASC', (project_id,))
             return cursor.fetchall()
         except Exception as e:
-            raise Exception(f"查询地质分段失败: {str(e)}") # 【修改】：直接抛出异常
+            raise Exception(f"查询地质分段失败: {str(e)}")
         finally:
             conn.close()
-            
-    # ================= Tab 3：开挖策略与工效数据操作 =================
 
-    def add_speed_config(self, project_id, rock_type, speed, method="开挖"):
-        """添加围岩工效配置（支持覆盖更新）"""
+    def save_segments_batch(self, project_id, data_list):
+        """【新增】批量保存地质分段（覆盖原数据）"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            # 检查是否已存在同类围岩
-            cursor.execute("SELECT id FROM speed_configs WHERE rock_type=? AND method=?", (rock_type, method))
-            row = cursor.fetchone()
-            if row:
-                cursor.execute("UPDATE speed_configs SET speed=? WHERE id=?", (speed, row[0]))
-            else:
-                cursor.execute("INSERT INTO speed_configs (rock_type, method, speed) VALUES (?, ?, ?)", (rock_type, method, speed))
+            # 1. 清理旧数据
+            cursor.execute("DELETE FROM geological_segments WHERE project_id=?", (project_id,))
+            # 2. 批量写入新数据
+            for item in data_list:
+                cursor.execute('''
+                    INSERT INTO geological_segments (project_id, start_station, end_station, rock_type)
+                    VALUES (?, ?, ?, ?)
+                ''', (project_id, item['start'], item['end'], item['rock']))
             conn.commit()
-            return True, "工效添加成功！"
+            return True, "地质分段信息批量保存成功！"
         except Exception as e:
             conn.rollback()
-            return False, f"添加失败: {str(e)}"
+            return False, f"地质分段保存失败: {str(e)}"
         finally:
             conn.close()
+            
+    # ================= Tab 3/4：工效数据操作 =================
 
     def get_speed_configs(self, method="开挖"):
-        """获取指定工法的所有工效配置"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -229,6 +269,23 @@ class DatabaseManager:
             return cursor.fetchall()
         except Exception as e:
             raise Exception(f"查询工效失败: {str(e)}")
+        finally:
+            conn.close()
+
+    def save_all_speed_configs(self, speed_data_list, method="开挖"):
+        """批量保存工效配置（覆盖当前工法全部配置）"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM speed_configs WHERE method=?", (method,))
+            for rock, speed in speed_data_list:
+                cursor.execute("INSERT INTO speed_configs (rock_type, method, speed) VALUES (?, ?, ?)", 
+                               (rock, method, speed))
+            conn.commit()
+            return True, f"{method}工效数据保存成功！"
+        except Exception as e:
+            conn.rollback()
+            return False, f"保存失败: {str(e)}"
         finally:
             conn.close()
 
@@ -255,12 +312,45 @@ class DatabaseManager:
 
     # ================= 核心计算结果回写操作 =================
 
+    def get_lining_speeds(self, project_id):
+        """获取当前项目的衬砌分段工效"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT start_station, end_station, speed FROM lining_speeds WHERE project_id=? ORDER BY start_station ASC',
+                (project_id,))
+            return cursor.fetchall()
+        except Exception as e:
+            raise Exception(f"查询衬砌工效失败: {str(e)}")
+        finally:
+            conn.close()
+
+    def save_lining_speeds_batch(self, project_id, data_list):
+        """批量保存衬砌分段工效（先清空后写入）"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM lining_speeds WHERE project_id=?", (project_id,))
+            for item in data_list:
+                cursor.execute('''
+                               INSERT INTO lining_speeds (project_id, start_station, end_station, speed)
+                               VALUES (?, ?, ?, ?)
+                               ''', (project_id, item['start'], item['end'], item['speed']))
+            conn.commit()
+            return True, "衬砌工效分段数据保存成功！"
+        except Exception as e:
+            conn.rollback()
+            return False, f"保存失败: {str(e)}"
+        finally:
+            conn.close()
+
     def clear_and_save_work_faces(self, project_id, results_list, method="开挖"):
         """清空旧的计算结果，并写入新的工作面数据"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            # 1. 清空当前项目下，该工法的所有旧记录
+            # 1. 清空
             cursor.execute("""
                            DELETE
                            FROM work_faces
@@ -268,7 +358,7 @@ class DatabaseManager:
                              AND adit_id IN (SELECT id FROM adits WHERE project_id = ?)
                            """, (method, project_id))
 
-            # 2. 批量插入新记录
+            # 2. 插入
             for res in results_list:
                 cursor.execute('''
                                INSERT INTO work_faces (adit_id, direction, method, start_time,
@@ -281,7 +371,7 @@ class DatabaseManager:
                                    res['calc_end'], res['duration'], res['finish_time']
                                ))
             conn.commit()
-            return True, "排期计算成功并已保存入库！"
+            return True, f"【{method}】排期已成功入库！"
         except Exception as e:
             conn.rollback()
             return False, f"保存计算结果失败: {str(e)}"
@@ -291,11 +381,10 @@ class DatabaseManager:
     # ================= Tab 5：成果展示数据提取 =================
 
     def get_all_work_faces(self, project_id):
-        """获取当前项目所有的计算成果（包含开挖和衬砌），用于生成图表和报表"""
+        """获取当前项目所有的计算成果（包含开挖和衬砌）"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            # 联表查询，按工法（先开挖后衬砌）和开工时间排序
             cursor.execute("""
                            SELECT a.adit_name,
                                   w.direction,
@@ -317,6 +406,7 @@ class DatabaseManager:
             raise Exception(f"提取成果数据失败: {str(e)}")
         finally:
             conn.close()
+
 # 测试用
 if __name__ == "__main__":
     db = DatabaseManager()
