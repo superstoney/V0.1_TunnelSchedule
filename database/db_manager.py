@@ -350,7 +350,7 @@ class DatabaseManager:
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            # 1. 清空
+            # 1. 清空旧数据
             cursor.execute("""
                            DELETE
                            FROM work_faces
@@ -358,15 +358,15 @@ class DatabaseManager:
                              AND adit_id IN (SELECT id FROM adits WHERE project_id = ?)
                            """, (method, project_id))
 
-            # 2. 插入
+            # 2. 插入新数据 (修复了强制取进洞时间为开工时间的Bug)
             for res in results_list:
                 cursor.execute('''
                                INSERT INTO work_faces (adit_id, direction, method, start_time,
                                                        is_dominant, buffer_days, calc_start_station,
                                                        calc_end_station, calc_work_duration, calc_finish_time)
-                               VALUES (?, ?, ?, (SELECT available_time FROM adits WHERE id = ?), ?, ?, ?, ?, ?, ?)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                ''', (
-                                   res['adit_id'], res['direction'], method, res['adit_id'],
+                                   res['adit_id'], res['direction'], method, res['start_time'],  # <== 这里直接使用传入的真实开工时间
                                    res['is_dominant'], res['buffer_days'], res['calc_start'],
                                    res['calc_end'], res['duration'], res['finish_time']
                                ))
@@ -381,7 +381,7 @@ class DatabaseManager:
     # ================= Tab 5：成果展示数据提取 =================
 
     def get_all_work_faces(self, project_id):
-        """获取当前项目所有的计算成果（包含开挖和衬砌）"""
+        """获取当前项目所有的计算成果，并按照严密的工程逻辑排序"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -399,7 +399,10 @@ class DatabaseManager:
                            FROM work_faces w
                                     JOIN adits a ON w.adit_id = a.id
                            WHERE a.project_id = ?
-                           ORDER BY w.method, w.start_time ASC
+                           ORDER BY 
+                                a.intersection_station ASC,  /* 1. 先按支洞的物理桩号排序 (从头到尾) */
+                                CASE w.direction WHEN '上游' THEN 1 ELSE 2 END ASC, /* 2. 同一支洞，先上游，后下游 */
+                                CASE w.method WHEN '开挖' THEN 1 ELSE 2 END ASC     /* 3. 同一方向，先开挖，后衬砌 */
                            """, (project_id,))
             return cursor.fetchall()
         except Exception as e:

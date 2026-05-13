@@ -694,39 +694,99 @@ class MainWindow(QMainWindow):
         if not self.current_project_id: return
         data = self.db.get_all_work_faces(self.current_project_id)
         if not data: return
+        
+        # 1. 刷新表格
         self.table_results.setRowCount(len(data))
         max_e = max_l = 0.0
         for r, row in enumerate(data):
-            for c in range(8): self.table_results.setItem(r, c, QTableWidgetItem(
-                f"{row[c]:.2f}" if isinstance(row[c], float) else str(row[c])))
-            if row[2] == '开挖':
-                max_e = max(max_e, row[6])
-            else:
-                max_l = max(max_l, row[6])
+            for c in range(8): self.table_results.setItem(r, c, QTableWidgetItem(f"{row[c]:.2f}" if isinstance(row[c], float) else str(row[c])))
+            if row[2] == '开挖': max_e = max(max_e, row[6])
+            else: max_l = max(max_l, row[6])
         self.label_summary.setText(f"全线开挖贯通：第 {max_e:.2f} 月 | 衬砌全线完工：第 {max_l:.2f} 月")
-
-        self.figure.clear();
+        
+        # 2. 刷新时距图
+        self.figure.clear()
         ax = self.figure.add_subplot(111)
-        adits = list(set(r[0] for r in data))
+        
+        adits = self.db.get_adits(self.current_project_id)
+        adit_names = list(set(r[0] for r in data))
         cmap = plt.get_cmap('tab10')
-        color_map = {a: cmap(i % 10) for i, a in enumerate(adits)}
+        color_map = {a: cmap(i % 10) for i, a in enumerate(adit_names)}
+        
         for row in data:
-            ax.plot([row[5], row[6]], [row[3], row[4]], color=color_map[row[0]],
-                    ls='-' if row[2] == '开挖' else '--', lw=2 if row[2] == '开挖' else 1.5, alpha=0.7)
-        ax.set_title("施工形象进度时距图");
-        ax.set_xlabel("时间 (月)");
-        ax.set_ylabel("桩号");
-        ax.grid(True, alpha=0.3)
+            adit_name, method = row[0], row[2]
+            st_start, st_end = row[3], row[4]
+            t_start, t_end = row[5], row[6]
+            
+            label = f"{adit_name}-{method}"
+            handles, labels = ax.get_legend_handles_labels()
+            if label in labels: label = ""
+            
+            ax.plot([st_start, st_end], [t_start, t_end], color=color_map[adit_name], 
+                    ls='-' if method=='开挖' else '--', lw=2.5 if method=='开挖' else 1.5, alpha=0.8,
+                    label=label)
+        
+        # 【修改核心】：将X轴移动到顶部
+        ax.xaxis.tick_top()
+        ax.xaxis.set_label_position('top')
+        
+        for adit in adits:
+            a_name, a_st, a_time = adit[1], adit[2], adit[3]
+            # 画垂直引线
+            ax.vlines(x=a_st, ymin=0, ymax=a_time, color='#7f8c8d', linestyle=':', lw=2, alpha=0.8)
+            ax.plot(a_st, a_time, 'ko', markersize=5)
+            # 文字横排，利用 transforms 挂载在图表上边缘外侧，避免和X轴刻度线重叠
+            ax.text(a_st, 1.05, f"{a_name}", transform=ax.get_xaxis_transform(), rotation=0, 
+                    va='bottom', ha='center', color='#2c3e50', fontsize=11, fontweight='bold')
+            
+        # 增加 pad 让标题向上方避让 X 轴和通道文字
+        ax.set_title("施工形象进度时距图", fontsize=16, fontweight='bold', pad=35) 
+        ax.set_xlabel("隧洞主洞桩号 (m)", fontsize=12)
+        ax.set_ylabel("施工时间 (月)", fontsize=12)
+        ax.grid(True, alpha=0.4, linestyle='--')
+        
+        ax.invert_yaxis()
+        
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        if by_label:
+            # 图例强制放在图表边框外侧的右上方
+            ax.legend(by_label.values(), by_label.keys(), loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0., fontsize=9)
+        
+        # 调整画布边缘留白，给标题、X轴和图例留出足够空间
+        self.figure.subplots_adjust(left=0.08, right=0.82, top=0.8, bottom=0.05)
+        
         self.canvas.draw()
 
     def export_to_excel(self):
-        path, _ = QFileDialog.getSaveFileName(self, "导出成果", "隧洞排期.xlsx", "Excel (*.xlsx)")
-        if path:
+        # 增加对 CSV 的支持，无需安装额外库
+        path, _ = QFileDialog.getSaveFileName(self, "导出成果", "隧洞排期.xlsx", "Excel 工作簿 (*.xlsx);;CSV 文件 (*.csv)")
+        if not path: return
+        try:
             headers = [self.table_results.horizontalHeaderItem(i).text() for i in range(8)]
-            rows = [[self.table_results.item(r, c).text() for c in range(8)] for r in
-                    range(self.table_results.rowCount())]
-            pd.DataFrame(rows, columns=headers).to_excel(path, index=False)
-            QMessageBox.information(self, "成功", "已导出至 Excel")
+            rows = [[self.table_results.item(r, c).text() for c in range(8)] for r in range(self.table_results.rowCount())]
+            df = pd.DataFrame(rows, columns=headers)
+            
+            if path.endswith('.csv'):
+                # 导出为CSV，解决未安装openpyxl的问题
+                df.to_csv(path, index=False, encoding='utf-8-sig')
+            else:
+                df.to_excel(path, index=False)
+            QMessageBox.information(self, "成功", f"数据已成功导出至:\n{path}")
+            
+        except ModuleNotFoundError as e:
+            if 'openpyxl' in str(e):
+                QMessageBox.critical(self, "缺少依赖模块", 
+                    "导出 Excel 失败：未检测到 openpyxl 模块！\n\n"
+                    "【原因分析】：您虽然全局安装了该模块，但当前程序正运行在虚拟环境中：\n"
+                    ".venv\\Lib\\site-packages\\...\n\n"
+                    "【解决办法】：请在 PyCharm 底部的 Terminal 终端内输入并回车执行：\n"
+                    "pip install openpyxl\n\n"
+                    "（临时方案：您可以再次点击导出，并在下方格式下拉框中选择 CSV 格式）")
+            else:
+                QMessageBox.critical(self, "导出失败", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"发生了未知错误：\n{str(e)}")
 
 
 class ProjectSelectDialog(QDialog):

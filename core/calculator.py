@@ -113,6 +113,7 @@ class ExcavationCalculator:
             results.append({
                 "adit_id": first_adit[0], "adit_name": first_adit[1], "direction": "上游",
                 "calc_start": first_adit[2], "calc_end": self.global_start,
+                "start_time": first_adit[3],  # 开挖的开工时间就是进洞时间
                 "duration": duration, "finish_time": first_adit[3] + duration,
                 "is_dominant": 0, "buffer_days": 0
             })
@@ -129,6 +130,7 @@ class ExcavationCalculator:
             results.append({
                 "adit_id": adit_L[0], "adit_name": adit_L[1], "direction": "下游",
                 "calc_start": adit_L[2], "calc_end": meeting_st,
+                "start_time": adit_L[3],
                 "duration": dur_L + (buffer_L / 30.0), "finish_time": adit_L[3] + dur_L + (buffer_L / 30.0),
                 "is_dominant": 1 if buffer_L > 0 else 0, "buffer_days": buffer_L
             })
@@ -138,6 +140,7 @@ class ExcavationCalculator:
             results.append({
                 "adit_id": adit_R[0], "adit_name": adit_R[1], "direction": "上游",
                 "calc_start": adit_R[2], "calc_end": meeting_st,
+                "start_time": adit_R[3],
                 "duration": dur_R + (buffer_R / 30.0), "finish_time": adit_R[3] + dur_R + (buffer_R / 30.0),
                 "is_dominant": 1 if buffer_R > 0 else 0, "buffer_days": buffer_R
             })
@@ -149,6 +152,7 @@ class ExcavationCalculator:
             results.append({
                 "adit_id": last_adit[0], "adit_name": last_adit[1], "direction": "下游",
                 "calc_start": last_adit[2], "calc_end": self.global_end,
+                "start_time": last_adit[3],
                 "duration": duration, "finish_time": last_adit[3] + duration,
                 "is_dominant": 0, "buffer_days": 0
             })
@@ -217,11 +221,12 @@ class LiningCalculator:
             ex_res = self.ex_dict.get((adit_first[1], '上游'))
             if not ex_res: raise ValueError(f"缺失 {adit_first[1]} 上游的开挖数据！")
 
-            start_time = ex_res[1]
+            start_time = ex_res[1]  
             time_cost = self._get_lining_time(self.global_start, adit_first[2])
             results.append({
                 "adit_id": adit_first[0], "adit_name": adit_first[1], "direction": "上游",
                 "calc_start": self.global_start, "calc_end": adit_first[2],
+                "start_time": start_time,  # 衬砌真实开工时间
                 "duration": time_cost, "finish_time": start_time + time_cost,
                 "is_dominant": 0, "buffer_days": 0, "strategy": 1, "custom_m": None
             })
@@ -238,20 +243,21 @@ class LiningCalculator:
             elif strat_data['strategy'] == 2:
                 ex_L = self.ex_dict.get((adit_L[1], '下游'))
                 if not ex_L: raise ValueError(f"缺失 {adit_L[1]} 下游的开挖数据！")
-                M = ex_L[0]
+                M = ex_L[0]  
             else:
                 M = strat_data['custom_m']
 
             # 确定衬砌开工时间
             ex_L = self.ex_dict.get((adit_L[1], '下游'), (0, 0))
             ex_R = self.ex_dict.get((adit_R[1], '上游'), (0, 0))
-            start_time = max(ex_L[1], ex_R[1])
+            start_time = max(ex_L[1], ex_R[1])  
 
             # 左侧支洞向下游倒退衬砌
             time_L = self._get_lining_time(M, st_L)
             results.append({
                 "adit_id": adit_L[0], "adit_name": adit_L[1], "direction": "下游",
                 "calc_start": M, "calc_end": st_L,
+                "start_time": start_time,
                 "duration": time_L, "finish_time": start_time + time_L,
                 "is_dominant": 0, "buffer_days": 0, "strategy": strat_data['strategy'], "custom_m": M
             })
@@ -261,6 +267,7 @@ class LiningCalculator:
             results.append({
                 "adit_id": adit_R[0], "adit_name": adit_R[1], "direction": "上游",
                 "calc_start": M, "calc_end": st_R,
+                "start_time": start_time,
                 "duration": time_R, "finish_time": start_time + time_R,
                 "is_dominant": 0, "buffer_days": 0, "strategy": strat_data['strategy'], "custom_m": M
             })
@@ -276,6 +283,7 @@ class LiningCalculator:
             results.append({
                 "adit_id": adit_last[0], "adit_name": adit_last[1], "direction": "下游",
                 "calc_start": self.global_end, "calc_end": adit_last[2],
+                "start_time": start_time,
                 "duration": time_cost, "finish_time": start_time + time_cost,
                 "is_dominant": 0, "buffer_days": 0, "strategy": 1, "custom_m": None
             })
