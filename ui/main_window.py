@@ -6,26 +6,31 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QDialog, QTableWidget, QTableWidgetItem, QHeaderView, 
                                QAbstractItemView, QSplitter, QGroupBox, QComboBox, QFileDialog, QTextBrowser)
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QBrush  # 【新增】引入颜色处理
+from PySide6.QtGui import QColor, QBrush  
 
-# === 引入 Matplotlib 用于绘制折线图 ===
+import os
+# 修正路径引入，确保单独运行也可加载模块
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 import matplotlib
 matplotlib.use('QtAgg')
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 
-# 解决中文显示问题
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False 
 
 from database.db_manager import DatabaseManager
-from core.calculator import ExcavationCalculator, LiningCalculator, normalize_rock  # 【新增】引入正则化函数
+from core.calculator import ExcavationCalculator, LiningCalculator, normalize_rock
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("TunnelSchedule V0.1 - 隧洞施工进度计算系统")
+        self.setWindowTitle("TunnelSchedule V1.0 - 隧洞施工进度计算系统")
         self.resize(1200, 800)
         
         self.db = DatabaseManager() 
@@ -35,11 +40,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
-        self.title_label = QLabel("TunnelSchedule V0.1")
+        self.title_label = QLabel("TunnelSchedule V1.0")
         self.title_label.setStyleSheet("font-size: 28px; font-weight: bold; color: #2C3E50;")
         self.layout.addWidget(self.title_label)
 
-        self.subtitle_label = QLabel("专业水利工程施工进度辅助设计系统")
+        self.subtitle_label = QLabel("水利工程长隧洞施工进度辅助设计系统")
         self.subtitle_label.setStyleSheet("font-size: 14px; color: #7F8C8D; font-style: italic; margin-bottom: 10px;")
         self.layout.addWidget(self.subtitle_label)
 
@@ -51,9 +56,9 @@ class MainWindow(QMainWindow):
         self.tab_results = QWidget() 
         
         self.tabs.addTab(self.tab_project_info, "1. 项目基础信息")
-        self.tabs.addTab(self.tab_data_entry, "2. 支洞与工作面划分")
+        self.tabs.addTab(self.tab_data_entry, "2. 施工通道与工作面")
         self.tabs.addTab(self.tab_strategy, "3. 开挖策略与计算") 
-        self.tabs.addTab(self.tab_lining, "4. 衬砌策略与排期")
+        self.tabs.addTab(self.tab_lining, "4. 衬砌策略与计算")  # 【修改名】
         self.tabs.addTab(self.tab_results, "5. 成果展示导出")
         
         self.layout.addWidget(self.tabs)
@@ -67,7 +72,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("系统就绪 | 数据库连接正常 | 当前未载入项目")
         for i in range(1, 5): self.tabs.setTabEnabled(i, False)
 
-    # ================== Tab 1、2、3、4 (基础功能保持不变) ==================
+    # ================== Tab 1：项目基础信息 ==================
     def init_tab_project_info(self):
         layout = QVBoxLayout(self.tab_project_info)
         form_layout = QFormLayout()
@@ -104,39 +109,32 @@ class MainWindow(QMainWindow):
 
     def open_project_dialog(self):
         projects = self.db.get_all_projects()
-        if not projects:
-            QMessageBox.information(self, "提示", "当前数据库中没有历史项目。")
-            return
-        dialog = ProjectSelectDialog(projects, self)
-        dialog.exec() 
-        selected_proj = dialog.get_selected_project()
-        if selected_proj:
+        if not projects: return QMessageBox.information(self, "提示", "数据库无历史项目。")
+        dialog = ProjectSelectDialog(projects, self); dialog.exec() 
+        selected = dialog.get_selected_project()
+        if selected:
             try:
-                self.current_project_id = selected_proj[0]
-                self.input_project_name.setText(str(selected_proj[1]))
-                self.input_start_station.setText(str(selected_proj[2]))
-                self.input_end_station.setText(str(selected_proj[3]))
+                self.current_project_id = selected[0]
+                self.input_project_name.setText(str(selected[1]))
+                self.input_start_station.setText(str(selected[2]))
+                self.input_end_station.setText(str(selected[3]))
                 self.btn_del_project.setEnabled(True)
-                QApplication.processEvents()
-                self.statusBar().showMessage(f"已载入项目：{selected_proj[1]}")
+                self.statusBar().showMessage(f"已载入项目：{selected[1]}")
                 for i in range(1, 5): self.tabs.setTabEnabled(i, True)
                 self.refresh_all_tabs()
             except Exception as e: QMessageBox.critical(self, "错误", f"载入异常：\n{str(e)}")
 
     def save_project(self):
-        name = self.input_project_name.text().strip()
-        start_str = self.input_start_station.text().strip()
-        end_str = self.input_end_station.text().strip()
+        name, start_str, end_str = self.input_project_name.text().strip(), self.input_start_station.text().strip(), self.input_end_station.text().strip()
         if not name or not start_str or not end_str: return
-        try: start_station, end_station = float(start_str), float(end_str)
-        except ValueError: return
+        try: start_st, end_st = float(start_str), float(end_str)
+        except: return
         if self.current_project_id is None:
-            success, msg = self.db.add_project(name, start_station, end_station)
+            success, msg = self.db.add_project(name, start_st, end_st)
             if success:
-                latest_projs = self.db.get_all_projects()
-                if latest_projs: self.current_project_id = latest_projs[0][0] 
-        else:
-            success, msg = self.db.update_project(self.current_project_id, name, start_station, end_station)
+                latest = self.db.get_all_projects()
+                if latest: self.current_project_id = latest[0][0] 
+        else: success, msg = self.db.update_project(self.current_project_id, name, start_st, end_st)
         if success:
             QMessageBox.information(self, "成功", msg)
             self.btn_del_project.setEnabled(True)
@@ -145,28 +143,29 @@ class MainWindow(QMainWindow):
 
     def delete_project(self):
         if not self.current_project_id: return
-        rep = QMessageBox.warning(self, "危险操作", "确定要彻底删除该项目及名下所有支洞、分段和排期成果吗？", QMessageBox.Yes | QMessageBox.No)
-        if rep == QMessageBox.Yes:
+        if QMessageBox.warning(self, "警告", "确定删除项目及排期？", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             success, msg = self.db.delete_project(self.current_project_id)
             if success:
-                self.current_project_id = None
-                self.input_project_name.clear(); self.input_start_station.clear(); self.input_end_station.clear()
+                self.current_project_id = None; self.input_project_name.clear(); self.input_start_station.clear(); self.input_end_station.clear()
                 self.btn_del_project.setEnabled(False)
                 for i in range(1, 5): self.tabs.setTabEnabled(i, False)
                 self.refresh_all_tabs(); QMessageBox.information(self, "已删除", msg)
 
+    # ================== Tab 2：通道与工作面划分 ==================
     def init_tab_data_entry(self):
         layout = QVBoxLayout(self.tab_data_entry); splitter = QSplitter(Qt.Vertical)
-        group_adit = QGroupBox("1. 施工支洞配置"); layout_adit = QVBoxLayout(group_adit)
+        group_adit = QGroupBox("1. 施工通道配置"); layout_adit = QVBoxLayout(group_adit)
         tl_adit = QHBoxLayout(); btn_add_adit = QPushButton("➕ 添加行"); btn_add_adit.clicked.connect(lambda: self.add_ui_row_adit())
         btn_del_adit = QPushButton("❌ 删除行"); btn_del_adit.clicked.connect(lambda: self.del_ui_row(self.table_adits))
         btn_paste_adit = QPushButton("📋 从 Excel 粘贴"); btn_paste_adit.clicked.connect(lambda: self.paste_from_excel('adit'))
-        btn_save_adit = QPushButton("💾 验证并保存支洞"); btn_save_adit.setStyleSheet("background-color: #2196F3; color: white;")
+        btn_save_adit = QPushButton("💾 验证并保存通道"); btn_save_adit.setStyleSheet("background-color: #2196F3; color: white;")
         btn_save_adit.clicked.connect(self.save_adits_to_db)
         for b in [btn_add_adit, btn_del_adit, btn_paste_adit, btn_save_adit]: tl_adit.addWidget(b)
         tl_adit.addStretch(); layout_adit.addLayout(tl_adit)
+        
         self.table_adits = QTableWidget(); self.table_adits.setColumnCount(4)
-        self.table_adits.setHorizontalHeaderLabels(["数据库ID", "支洞名称", "与主洞交叉桩号", "进洞时间(月)"])
+        # 【修改】支洞名称 -> 施工通道名称
+        self.table_adits.setHorizontalHeaderLabels(["数据库ID", "施工通道名称", "与主洞交叉桩号", "进洞时间(月)"])
         self.table_adits.setColumnHidden(0, True); self.table_adits.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout_adit.addWidget(self.table_adits); splitter.addWidget(group_adit)
         
@@ -178,6 +177,7 @@ class MainWindow(QMainWindow):
         btn_save_seg.clicked.connect(self.save_segments_to_db)
         for b in [btn_add_seg, btn_del_seg, btn_paste_seg, btn_save_seg]: tl_seg.addWidget(b)
         tl_seg.addStretch(); layout_seg.addLayout(tl_seg)
+        
         self.table_segments = QTableWidget(); self.table_segments.setColumnCount(4)
         self.table_segments.setHorizontalHeaderLabels(["数据库ID", "起点桩号", "终点桩号", "围岩类别"])
         self.table_segments.setColumnHidden(0, True); self.table_segments.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -209,11 +209,18 @@ class MainWindow(QMainWindow):
             name = self.table_adits.item(r, 1).text().strip() if self.table_adits.item(r, 1) else ""
             st = self.table_adits.item(r, 2).text().strip() if self.table_adits.item(r, 2) else ""
             tm = self.table_adits.item(r, 3).text().strip() if self.table_adits.item(r, 3) else "0"
-            if not name: return
+            if not name: return QMessageBox.warning(self, "错误", f"第{r+1}行名称为空")
             try: data.append({'name': name, 'station': float(st), 'time': float(tm)})
-            except: return
+            except: return QMessageBox.warning(self, "错误", f"第{r+1}行桩号格式错误")
+        
+        # 【新增逻辑】：按桩号强制排序
+        if data: data.sort(key=lambda x: x['station'])
+
         success, msg = self.db.save_adits_batch(self.current_project_id, data)
-        if success: QMessageBox.information(self, "成功", msg)
+        if success: 
+            # 【流转引导提示】
+            QMessageBox.information(self, "保存成功", "施工通道已按桩号自动排序并保存。\n\n【提示】：基础数据变更，请依次前往 Tab 3、Tab 4 更新策略并重新启动计算！")
+            self.refresh_tab2_data()
 
     def save_segments_to_db(self):
         if not self.current_project_id: return
@@ -223,48 +230,29 @@ class MainWindow(QMainWindow):
             ed = self.table_segments.item(r, 2).text().strip() if self.table_segments.item(r, 2) else ""
             combo = self.table_segments.cellWidget(r, 3); rock = combo.currentText().strip() if combo else ""
             if not st and not ed and not rock: continue
-            if not st or not ed or not rock:
-                QMessageBox.warning(self, "错误", f"第{r+1}行信息不完整！"); return
-            try: data.append({'start': float(st), 'end': float(ed), 'rock': rock})
-            except: QMessageBox.warning(self, "错误", f"第{r+1}行桩号格式错误"); return
+            if not st or not ed or not rock: return QMessageBox.warning(self, "错误", f"第{r+1}行不完整！")
+            try: data.append({'start': float(st), 'end': float(ed), 'rock': rock, 's': min(float(st), float(ed)), 'e': max(float(st), float(ed))})
+            except: return QMessageBox.warning(self, "错误", f"第{r+1}行桩号错误")
 
         if data:
-            # 【新增】1. 自动格式化起止大小关系，并按起步桩号强行升序排序
-            for d in data:
-                d['s'] = min(d['start'], d['end'])
-                d['e'] = max(d['start'], d['end'])
             data.sort(key=lambda x: x['s'])
-
             conn = self.db.get_connection()
             proj = conn.cursor().execute("SELECT start_station, end_station FROM projects WHERE id=?", (self.current_project_id,)).fetchone()
             conn.close()
-            
             if proj:
                 p_start, p_end = min(proj[0], proj[1]), max(proj[0], proj[1])
                 errors = []
-                
-                # 【新增】2. 严格校验首尾边界是否与项目总边界咬合
-                if abs(data[0]['s'] - p_start) > 0.001:
-                    errors.append(f"首段起点 ({data[0]['s']}) 与项目总体起点 ({p_start}) 不一致！")
-                if abs(data[-1]['e'] - p_end) > 0.001:
-                    errors.append(f"末段终点 ({data[-1]['e']}) 与项目总体终点 ({p_end}) 不一致！")
-                
-                # 【新增】3. 严格校验内部地质分段是否连续（无缝隙、无重叠）
+                if abs(data[0]['s'] - p_start) > 0.001: errors.append(f"首段起点不符全局({p_start})")
+                if abs(data[-1]['e'] - p_end) > 0.001: errors.append(f"末段终点不符全局({p_end})")
                 for i in range(len(data)-1):
-                    if abs(data[i]['e'] - data[i+1]['s']) > 0.001:
-                        errors.append(f"分段不连续或重叠：[{data[i]['s']}~{data[i]['e']}] 与 [{data[i+1]['s']}~{data[i+1]['e']}] 无法完美衔接！")
-                
-                # 如果存在任何逻辑漏洞，直接弹窗阻断保存！
-                if errors:
-                    err_msg = "\n".join(errors)
-                    QMessageBox.warning(self, "地质分段拓扑错误 (阻断)", f"检测到以下严重逻辑问题：\n\n{err_msg}\n\n请修改正确后再保存计算！")
-                    return 
+                    if abs(data[i]['e'] - data[i+1]['s']) > 0.001: errors.append(f"段落不连续: {data[i]['e']} -> {data[i+1]['s']}")
+                if errors: return QMessageBox.warning(self, "阻断", "错误：\n" + "\n".join(errors))
 
-        # 校验全部通过后，将排好序的干净数据写入数据库
         success, msg = self.db.save_segments_batch(self.current_project_id, data)
         if success: 
-            QMessageBox.information(self, "成功", "地质分段连续性校验通过，已排序并保存！")
-            self.refresh_tab2_data()  # 触发刷新，让用户在表格中直接看到排好序的结果
+            # 【流转引导提示】
+            QMessageBox.information(self, "保存成功", "地质分段校验通过并自动排序。\n\n【提示】：请前往 Tab 3 检查缺失的开挖工效，并重新计算排期！")
+            self.refresh_tab2_data()
 
     def refresh_tab2_data(self):
         if not self.current_project_id: return
@@ -272,22 +260,30 @@ class MainWindow(QMainWindow):
         for r in self.db.get_adits(self.current_project_id): self.add_ui_row_adit(r[1], r[2], r[3])
         for r in self.db.get_segments(self.current_project_id): self.add_ui_row_segment(r[1], r[2], r[3])
 
+    # ================== Tab 3：开挖策略与计算 ==================
     def init_tab_strategy(self):
         layout = QVBoxLayout(self.tab_strategy); splitter = QSplitter(Qt.Vertical)
         group_speed = QGroupBox("1. 围岩开挖工效设置"); layout_speed = QVBoxLayout(group_speed)
         bl = QHBoxLayout()
         for b, f in [("📋 粘贴", lambda: self.paste_from_excel('speed')), ("➕ 添加", self.add_excavate_speed_row), ("➖ 删除", self.delete_excavate_speed_row)]:
             btn = QPushButton(b); btn.clicked.connect(f); bl.addWidget(btn)
-        bs = QPushButton("💾 保存"); bs.setStyleSheet("background-color: #4CAF50; color: white;"); bs.clicked.connect(self.save_excavate_speed_data); bl.addWidget(bs)
+        bs = QPushButton("💾 保存工效"); bs.setStyleSheet("background-color: #4CAF50; color: white;"); bs.clicked.connect(self.save_excavate_speed_data); bl.addWidget(bs)
         layout_speed.addLayout(bl)
+        
         self.table_speeds = QTableWidget(); self.table_speeds.setColumnCount(2)
-        self.table_speeds.setHorizontalHeaderLabels(["围岩类别", "进尺速度"]); self.table_speeds.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # 【修改名】：进尺速度 -> 月开挖进尺
+        self.table_speeds.setHorizontalHeaderLabels(["围岩类别", "月开挖进尺 (m)"])
+        self.table_speeds.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout_speed.addWidget(self.table_speeds); splitter.addWidget(group_speed)
 
         group_clash = QGroupBox("2. 开挖对向贯通策略"); layout_clash = QVBoxLayout(group_clash)
         self.table_strategy = QTableWidget(); self.table_strategy.setColumnCount(4)
-        self.table_strategy.setHorizontalHeaderLabels(["对接区间", "左支洞", "右支洞", "主导工作面"])
-        self.table_strategy.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch); layout_clash.addWidget(self.table_strategy)
+        # 【修改名】：左支洞 -> 左通道
+        self.table_strategy.setHorizontalHeaderLabels(["对接区间", "左通道", "右通道", "主导工作面"])
+        # 让表格填满
+        self.table_strategy.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout_clash.addWidget(self.table_strategy)
+        
         bc = QPushButton("▶ 启动开挖计算"); bc.setStyleSheet("background-color: #E91E63; color: white; padding: 10px; font-weight: bold;")
         bc.clicked.connect(self.execute_calculation); layout_clash.addWidget(bc)
         splitter.addWidget(group_clash); layout.addWidget(splitter)
@@ -307,19 +303,22 @@ class MainWindow(QMainWindow):
             rk = self.table_speeds.item(r, 0).text().strip() if self.table_speeds.item(r, 0) else ""
             sp = self.table_speeds.item(r, 1).text().strip() if self.table_speeds.item(r, 1) else ""
             if not rk and not sp: continue
-            if not rk or not sp: return
+            if not rk or not sp: return QMessageBox.warning(self, "错误", "不完整")
             try:
                 if float(sp) <= 0: raise ValueError
-            except: return
+            except: return QMessageBox.warning(self, "错误", "非法速度")
             nr = clean_rock(rk)
-            if nr in seen: return
+            if nr in seen: return QMessageBox.warning(self, "错误", "重复围岩")
             seen.add(nr); speed_list.append((nr, float(sp)))
         if not speed_list: return
         missing = set(clean_rock(s[3]) for s in self.db.get_segments(self.current_project_id) if s[3]) - seen
-        if missing:
-            QMessageBox.warning(self, "阻断", f"缺失围岩开挖速度：{', '.join(missing)}")
-            return
-        self.db.save_all_speed_configs(speed_list, method="开挖"); self.refresh_tab3_data()
+        if missing: return QMessageBox.warning(self, "阻断", f"缺失围岩：{', '.join(missing)}")
+        
+        success, msg = self.db.save_all_speed_configs(speed_list, method="开挖")
+        if success:
+            # 【流转引导提示】
+            QMessageBox.information(self, "成功", "开挖工效数据已保存！\n\n【提示】：请点击下方【▶ 启动开挖计算】更新底层排期！")
+            self.refresh_tab3_data()
 
     def refresh_tab3_data(self):
         if not self.current_project_id: return
@@ -343,24 +342,37 @@ class MainWindow(QMainWindow):
             if cb: smap[(self.table_strategy.item(i, 1).text(), self.table_strategy.item(i, 2).text())] = cb.currentText()
         try:
             res = ExcavationCalculator(self.db, self.current_project_id).run_calculation(smap)
-            self.db.clear_and_save_work_faces(self.current_project_id, res); QMessageBox.information(self, "完成", "开挖计算成功"); self.refresh_all_tabs()
+            self.db.clear_and_save_work_faces(self.current_project_id, res)
+            # 【流转引导提示】
+            QMessageBox.information(self, "开挖计算完成", "全线开挖成果已刷新！\n\n【必须操作】：衬砌依赖于开挖成果，请前往 Tab 4 重新点击启动衬砌计算！")
+            self.refresh_all_tabs()
         except Exception as e: QMessageBox.critical(self, "错误", str(e))
 
+    # ================== Tab 4：衬砌策略与计算 ==================
     def init_tab_lining(self):
         layout = QVBoxLayout(self.tab_lining); splitter = QSplitter(Qt.Vertical)
         group_speed = QGroupBox("1. 衬砌分段工效"); layout_speed = QVBoxLayout(group_speed)
         bl = QHBoxLayout(); bp = QPushButton("📋 粘贴"); bp.clicked.connect(lambda: self.paste_from_excel('lining_speed'))
         ba = QPushButton("➕ 添加"); ba.clicked.connect(lambda: self.table_lining_speeds.insertRow(self.table_lining_speeds.rowCount()))
         bd = QPushButton("➖ 删除"); bd.clicked.connect(lambda: self.del_ui_row(self.table_lining_speeds))
-        bs = QPushButton("💾 保存"); bs.setStyleSheet("background-color: #4CAF50; color: white;"); bs.clicked.connect(self.save_lining_speed_data)
+        bs = QPushButton("💾 保存工效"); bs.setStyleSheet("background-color: #4CAF50; color: white;"); bs.clicked.connect(self.save_lining_speed_data)
         for b in [bp, ba, bd, bs]: bl.addWidget(b)
-        layout_speed.addLayout(bl); self.table_lining_speeds = QTableWidget(); self.table_lining_speeds.setColumnCount(3)
-        self.table_lining_speeds.setHorizontalHeaderLabels(["起点", "终点", "速度"]); self.table_lining_speeds.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout_speed.addLayout(bl)
+        
+        self.table_lining_speeds = QTableWidget(); self.table_lining_speeds.setColumnCount(3)
+        # 【修改名】：起点 -> 起点桩号，终点 -> 终点桩号，速度 -> 月衬砌进尺 (m)
+        self.table_lining_speeds.setHorizontalHeaderLabels(["起点桩号", "终点桩号", "月衬砌进尺 (m)"])
+        self.table_lining_speeds.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout_speed.addWidget(self.table_lining_speeds); splitter.addWidget(group_speed)
 
         group_strat = QGroupBox("2. 衬砌对接分界"); layout_strat = QVBoxLayout(group_strat)
         self.table_lining_strat = QTableWidget(); self.table_lining_strat.setColumnCount(4)
-        self.table_lining_strat.setHorizontalHeaderLabels(["对接区间", "左桩号", "右桩号", "分界点"]); self.table_lining_strat.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        # 【修改名】
+        self.table_lining_strat.setHorizontalHeaderLabels(["对接区间", "左通道", "右通道", "分界点设定"])
+        
+        # 【完美解决下拉框文字遮挡】：设置所有列均匀拉伸
+        self.table_lining_strat.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        
         layout_strat.addWidget(self.table_lining_strat)
         bc = QPushButton("▶ 启动衬砌计算"); bc.setStyleSheet("background-color: #9C27B0; color: white; padding: 10px; font-weight: bold;")
         bc.clicked.connect(self.execute_lining_calculation); layout_strat.addWidget(bc)
@@ -374,20 +386,14 @@ class MainWindow(QMainWindow):
             ed = self.table_lining_speeds.item(r, 1).text().strip() if self.table_lining_speeds.item(r, 1) else ""
             sp = self.table_lining_speeds.item(r, 2).text().strip() if self.table_lining_speeds.item(r, 2) else ""
             if not st and not ed and not sp: continue
-            if not st or not ed or not sp: return
+            if not st or not ed or not sp: return QMessageBox.warning(self, "错误", "不完整")
             try: data.append({'start': float(st), 'end': float(ed), 'speed': float(sp)})
-            except: return
-        if data:
-            conn = self.db.get_connection()
-            proj = conn.cursor().execute("SELECT start_station, end_station FROM projects WHERE id=?", (self.current_project_id,)).fetchone()
-            conn.close()
-            if proj:
-                min_st, max_st = min([min(d['start'], d['end']) for d in data]), max([max(d['start'], d['end']) for d in data])
-                p_st, p_ed = min(proj[0], proj[1]), max(proj[0], proj[1])
-                if abs(min_st - p_st) > 0.001 or abs(max_st - p_ed) > 0.001:
-                    rep = QMessageBox.warning(self, "边界警告", f"分段起止不一致，坚持保存？", QMessageBox.Yes | QMessageBox.No)
-                    if rep == QMessageBox.No: return
-        self.db.save_lining_speeds_batch(self.current_project_id, data); self.refresh_tab4_data()
+            except: return QMessageBox.warning(self, "错误", "数字非法")
+            
+        success, msg = self.db.save_lining_speeds_batch(self.current_project_id, data)
+        if success:
+            QMessageBox.information(self, "保存成功", "衬砌分段工效已保存。\n\n【提示】：请点击下方【▶ 启动衬砌计算】以应用最新参数！")
+            self.refresh_tab4_data()
 
     def refresh_tab4_data(self):
         if not self.current_project_id: return
@@ -416,8 +422,10 @@ class MainWindow(QMainWindow):
             slist.append({'strategy': c.itemAt(0).widget().currentIndex() + 1, 'custom_m': float(c.itemAt(1).widget().text() or 0)})
         try:
             res = LiningCalculator(self.db, self.current_project_id).run_calculation(slist)
-            self.db.clear_and_save_work_faces(self.current_project_id, res, method="衬砌"); self.refresh_all_tabs()
-            QMessageBox.information(self, "完成", "衬砌排期完成！")
+            self.db.clear_and_save_work_faces(self.current_project_id, res, method="衬砌")
+            # 【流转引导提示】
+            QMessageBox.information(self, "衬砌计算完成", "全线排期已全部锁定！\n\n【成功】：请前往 Tab 5 查看完整的施工成果报表与时距图。")
+            self.refresh_all_tabs()
         except Exception as e: QMessageBox.critical(self, "错误", str(e))
 
     def paste_from_excel(self, target_type):
@@ -453,7 +461,7 @@ class MainWindow(QMainWindow):
     def refresh_all_tabs(self):
         self.refresh_tab2_data(); self.refresh_tab3_data(); self.refresh_tab4_data(); self.refresh_tab5_data()
 
-    # ================== 【深度升级】Tab 5：成果展示与高级生成 ==================
+    # ================== Tab 5：成果展示与高级生成 ==================
     def init_tab_results(self):
         layout = QVBoxLayout(self.tab_results)
         self.label_summary = QLabel("【项目全局评估】")
@@ -484,7 +492,6 @@ class MainWindow(QMainWindow):
         data = self.db.get_all_work_faces(self.current_project_id)
         if not data: return
         
-        # 1. 刷新表格
         self.table_results.setRowCount(len(data))
         max_e = max_l = 0.0
         
@@ -504,12 +511,12 @@ class MainWindow(QMainWindow):
 
             for c in range(8):
                 val = f"{row[c]:.2f}" if isinstance(row[c], float) else str(row[c])
-                item = QTableWidgetItem(val); item.setBackground(bg_brush)
+                item = QTableWidgetItem(val)
+                item.setBackground(bg_brush)
                 self.table_results.setItem(r, c, item)
                 
-        self.label_summary.setText(f"全线开挖贯通：第 {max_e:.2f} 月 | 衬砌全线完工：第 {max_l:.2f} 月")
+        self.label_summary.setText(f"全线开挖贯通：第 {max_e:.1f} 月 | 衬砌全线完工：第 {max_l:.1f} 月")
         
-        # 2. 刷新时距图
         self.figure.clear(); ax = self.figure.add_subplot(111)
         adits = self.db.get_adits(self.current_project_id)
         cmap = plt.get_cmap('tab10')
@@ -544,48 +551,83 @@ class MainWindow(QMainWindow):
                 st_pts.append(s2); t_pts.append(curr_t)
             return st_pts, t_pts
 
+        conn = self.db.get_connection()
+        proj = conn.cursor().execute("SELECT start_station, end_station FROM projects WHERE id=?", (self.current_project_id,)).fetchone()
+        conn.close()
+        p_start, p_end = (min(proj[0], proj[1]), max(proj[0], proj[1])) if proj else (0, 0)
+
+        excavation_meetings = set()
+        lining_boundaries = set()
+        global_max_t = 0.0
+        global_max_st = 0.0
+
         for row in data:
-            a_name, method, st_s, st_e, t_s = row[0], row[2], row[3], row[4], row[5]
+            a_name, method, st_s, st_e, t_s, t_e = row[0], row[2], row[3], row[4], row[5], row[6]
             st_pts, t_pts = get_trajectory(method, st_s, st_e, t_s)
+            
+            if t_e > global_max_t:
+                global_max_t = t_e
+                global_max_st = st_e
+                
+            if method == '开挖':
+                if abs(st_e - p_start) > 0.01 and abs(st_e - p_end) > 0.01:
+                    excavation_meetings.add((round(st_e, 2), round(t_e, 2)))
+            elif method == '衬砌':
+                if abs(st_s - p_start) > 0.01 and abs(st_s - p_end) > 0.01:
+                    lining_boundaries.add((round(st_s, 2), round(t_s, 2)))
             
             label = f"{a_name}-{method}"
             if label in ax.get_legend_handles_labels()[1]: label = ""
             ax.plot(st_pts, t_pts, color=line_color_map[a_name], 
                     ls='-' if method=='开挖' else '--', lw=2.5 if method=='开挖' else 1.5, alpha=0.8, label=label)
-            
-            if len(st_pts) > 1:
-                ax.text(st_pts[-1], t_pts[-1], f" {t_pts[-1]:.1f}月", color=line_color_map[a_name], 
-                        fontsize=8, va='top', ha='center', fontweight='bold')
-        
-        # 【核心修改：扩展Y轴负半轴，将文字藏在负半轴空间内】
+
         max_time = max(max_e, max_l) if max(max_e, max_l) > 0 else 10
         
-        # Y轴倒置，所以 -max_time*0.08 实际上是在图表的最上方
-        ax.set_ylim(max_time * 1.05, -max_time * 0.08)
+        for st, t in excavation_meetings:
+            ax.plot(st, t, marker='o', color='#E67E22', markersize=5, zorder=4)
+            ax.plot([st, st], [0, t], color='#E67E22', linestyle=':', lw=1.5, alpha=0.6, zorder=2)
         
-        # 强制画一条 Y=0 的实线，代表地表/工期0起点
-        ax.axhline(0, color='black', linewidth=1.2, linestyle='-')
+        for st, t in lining_boundaries:
+            ax.plot(st, t, marker='s', color='#8E44AD', markersize=5, zorder=4)
+            ax.plot([st, st], [0, t], color='#8E44AD', linestyle=':', lw=1.5, alpha=0.6, zorder=2)
+
+        critical_stations = set(st for st, t in excavation_meetings) | set(st for st, t in lining_boundaries)
+        for st in critical_stations:
+            ax.text(st, -max_time * 0.015, f"{st:.1f}", color='#34495E', fontsize=9, fontweight='bold',
+                    ha='center', va='bottom', zorder=5, 
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.8, pad=0.5))
+
+        # 【调整五角星及文字位置，彻底解决遮挡】
+        # y轴向下增长，将文字放在五角星的下方（数值更大），留足空间
+        if global_max_t > 0:
+            ax.plot(global_max_st, global_max_t, marker='*', color='red', markersize=14, zorder=6)
+            ax.text(global_max_st, global_max_t + max_time * 0.04, f"{global_max_t:.1f}月", 
+                    color='red', fontsize=10, fontweight='bold', ha='center', va='top', zorder=6,
+                    bbox=dict(facecolor='white', edgecolor='red', alpha=0.9, boxstyle='round,pad=0.4'))
+
+        # 增加 Y 轴底部的留白(15%)，避免红星文字被 X轴切断
+        ax.set_ylim(max_time * 1.15, -max_time * 0.12)
+        ax.axhline(0, color='black', linewidth=1.2, linestyle='-', zorder=3)
 
         ax.xaxis.tick_top()
         ax.xaxis.set_label_position('top')
         
         for adit in adits:
             a_name, a_st, a_time = adit[1], adit[2], adit[3]
-            ax.vlines(x=a_st, ymin=0, ymax=a_time, color='#7f8c8d', linestyle=':', lw=2, alpha=0.8)
+            ax.vlines(x=a_st, ymin=0, ymax=a_time, color='#7f8c8d', linestyle='-', lw=2, alpha=0.8)
             ax.plot(a_st, a_time, 'ko', markersize=5)
-            # 文字垂直居中于 Y=0 和 上边框(-max_time*0.08) 的中间
-            ax.text(a_st, -max_time * 0.04, f"{a_name}", va='center', ha='center', color='#2c3e50', fontsize=11, fontweight='bold')
+            ax.text(a_st, -max_time * 0.07, f"{a_name}", va='center', ha='center', color='#2c3e50', fontsize=11, fontweight='bold')
             
-        ax.set_title("隧洞施工进度时距图 (横轴: 桩号 | 纵轴: 时间)", fontsize=15, fontweight='bold', pad=35) 
+        ax.set_title("隧洞施工进度时距图", fontsize=15, fontweight='bold', pad=35) 
         ax.set_xlabel("主洞桩号 (m)", fontsize=12)
-        ax.set_ylabel("相对施工时间 (月)", fontsize=12)
+        ax.set_ylabel("施工时间 (月)", fontsize=12)
         ax.grid(True, alpha=0.4, linestyle='--')
         
         handles, labels = ax.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
         if by_label:
             ax.legend(by_label.values(), by_label.keys(), loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0., fontsize=9)
-        self.figure.subplots_adjust(left=0.08, right=0.82, top=0.82, bottom=0.05)
+        self.figure.subplots_adjust(left=0.08, right=0.82, top=0.80, bottom=0.08)
         self.canvas.draw()
 
     # ================== AI 报告生成引擎 ==================
@@ -599,7 +641,6 @@ class MainWindow(QMainWindow):
         critical_task = None
         adit_summary = {}
         
-        # 数据结构化归集
         for row in data:
             adit = row[0]
             if adit not in adit_summary: adit_summary[adit] = {'ex': 0.0, 'li': 0.0}
@@ -610,11 +651,10 @@ class MainWindow(QMainWindow):
                 max_e = max(max_e, row[6])
             else: 
                 adit_summary[adit]['li'] += length
-                if row[6] >= max_l:  # 寻找完工最晚的关键节点
+                if row[6] >= max_l:
                     max_l = row[6]
                     critical_task = row
 
-        # 组装专业话术
         report = []
         report.append("="*45)
         report.append("  隧洞排期引擎 - 整体施工进度辅助决策报告  ")
@@ -641,9 +681,8 @@ class MainWindow(QMainWindow):
             report.append(f"📍 影响范围：主洞桩号 {c_start:.2f} m  至  {c_end:.2f} m。")
             report.append(f"该工作段于第 {c_tend:.2f} 月最终结束，全程不存在任何时间富裕缓冲。")
             report.append(f"\n【调度建议】：")
-            report.append(f"该区域施工效率的微小波动都将直接延长或缩短整个项目的移交时间。建议建设方针对该节点实施最高级别的进度干预：优先保障该通道的掌子面资源倾斜、优化出渣动线，并提高衬砌台车的工序衔接紧凑度。")
+            report.append(f"该区域施工效率的波动将直接影响移交时间。建议优先保障该通道的资源倾斜、优化出渣动线，并提高衬砌台车的工序衔接紧凑度。")
         
-        # 弹窗展示及快捷复制
         dlg = QDialog(self)
         dlg.setWindowTitle("进度分析智能评估报告")
         dlg.resize(650, 550)
@@ -658,10 +697,8 @@ class MainWindow(QMainWindow):
         btn_copy.setStyleSheet("background-color: #4CAF50; color: white; padding: 12px; font-weight: bold; font-size: 14px;")
         btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(tb.toPlainText()) or QMessageBox.information(dlg, "成功", "报告已复制！可直接粘贴至Word。"))
         ly.addWidget(btn_copy)
-        
         dlg.exec()
 
-    # ================== 健壮的 Excel 导出模块 ==================
     def export_to_excel(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出成果", "隧洞排期.xlsx", "Excel 工作簿 (*.xlsx);;CSV 文件 (*.csv)")
         if not path: return
@@ -677,7 +714,7 @@ class MainWindow(QMainWindow):
             if 'openpyxl' in str(e):
                 QMessageBox.critical(self, "缺少依赖模块", 
                     "导出 Excel 失败：未检测到 openpyxl 模块！\n\n请在 PyCharm 底部 Terminal 终端输入执行：\n"
-                    "pip install openpyxl\n\n（或者您也可以下拉文件类型，选择 CSV 格式进行导出）")
+                    "pip install openpyxl\n\n（或者下拉文件类型，选择 CSV 格式导出）")
         except Exception as e: QMessageBox.critical(self, "失败", str(e))
 
 class ProjectSelectDialog(QDialog):

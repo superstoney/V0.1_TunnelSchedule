@@ -14,7 +14,7 @@ def main():
     
     # 设置应用全局字体 (可选，提升中文显示效果)
     font = app.font()
-    font.setFamily("Microsoft YaHei")
+    #font.setFamily("Microsoft YaHei")
     app.setFont(font)
 
     # 3. 显示主窗体
